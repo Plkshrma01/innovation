@@ -5,6 +5,8 @@
   const authView = $("auth-view"), dashboardView = $("dashboard-view");
   let supabase = null, currentUser = null, currentProfile = null;
   let passengerMap = null, driverMap = null, online = false, userMarker = null;
+  // Supabase recovery links may return a recovery type in the URL hash or query.
+  let recoveryMode = /(?:^|[&#?])type=recovery(?:&|$)/i.test(window.location.hash + "&" + window.location.search);
   const validConfig = cfg.supabaseUrl && cfg.supabaseAnonKey &&
     !cfg.supabaseUrl.includes("YOUR-PROJECT") && !cfg.supabaseAnonKey.includes("YOUR_SUPABASE");
   if (window.supabase && validConfig) {
@@ -24,12 +26,21 @@
   }
   function clearAuthMessage(){ $("auth-message").classList.add("hidden"); }
   function showLogin() {
-    $("login-form").classList.remove("hidden"); $("signup-form").classList.add("hidden");
+    recoveryMode = false;
+    $("login-form").classList.remove("hidden"); $("signup-form").classList.add("hidden"); $("reset-password-form").classList.add("hidden");
     $("show-login").classList.add("active"); $("show-signup").classList.remove("active"); clearAuthMessage();
   }
   function showSignup() {
-    $("signup-form").classList.remove("hidden"); $("login-form").classList.add("hidden");
+    recoveryMode = false;
+    $("signup-form").classList.remove("hidden"); $("login-form").classList.add("hidden"); $("reset-password-form").classList.add("hidden");
     $("show-signup").classList.add("active"); $("show-login").classList.remove("active"); clearAuthMessage();
+  }
+  function showPasswordReset(message = "Enter and confirm your new password below.") {
+    recoveryMode = true;
+    authView.classList.remove("hidden"); dashboardView.classList.add("hidden");
+    $("login-form").classList.add("hidden"); $("signup-form").classList.add("hidden"); $("reset-password-form").classList.remove("hidden");
+    $("show-login").classList.remove("active"); $("show-signup").classList.remove("active");
+    setAuthMessage(message);
   }
   function friendlyError(err) {
     const msg = (err && err.message) ? err.message : String(err || "Unknown error");
@@ -64,8 +75,8 @@
         currentUser = data.user;
         await loadApp();
       } else {
-        showLogin(); $("login-email").value = email;
         setAuthMessage("Account request received. Check your email for a confirmation link, then return here and log in. If email confirmation is disabled in your demo project, try logging in now.");
+        showLogin(); $("login-email").value = email;
       }
     } catch (err) { setAuthMessage(friendlyError(err), true); }
     finally { button.disabled = false; button.innerHTML = 'Create account <span>→</span>'; }
@@ -89,10 +100,36 @@
     const email = $("login-email").value.trim();
     if (!email) return setAuthMessage("Enter your email address first, then choose Forgot password.", true);
     try {
-      const {error} = await supabase.auth.resetPasswordForEmail(email, {redirectTo: window.location.href.split("#")[0]});
+      const redirectTo = window.location.origin + window.location.pathname;
+      const {error} = await supabase.auth.resetPasswordForEmail(email, {redirectTo});
       if (error) throw error;
-      setAuthMessage("If an account exists for this email, Supabase will send a password-reset link.");
+      setAuthMessage("If an account exists for this email, Supabase will send a password-reset link. Open the link on this same website to choose a new password.");
     } catch(err) { setAuthMessage(friendlyError(err), true); }
+  });
+
+  $("cancel-password-reset").addEventListener("click", () => showLogin());
+
+  $("reset-password-form").addEventListener("submit", async (e) => {
+    e.preventDefault(); clearAuthMessage(); if (!needClient()) return;
+    const password = $("reset-password").value;
+    const confirm = $("reset-password-confirm").value;
+    if (password.length < 8) return setAuthMessage("Use a password with at least 8 characters.", true);
+    if (password !== confirm) return setAuthMessage("The two passwords do not match.", true);
+    const button = $("reset-password-form").querySelector('button[type="submit"]');
+    button.disabled = true; button.textContent = "Saving password…";
+    try {
+      const {error} = await supabase.auth.updateUser({password});
+      if (error) throw error;
+      recoveryMode = false;
+      $("reset-password-form").reset();
+      await supabase.auth.signOut();
+      showLogin();
+      setAuthMessage("Password updated successfully. Log in with your new password.");
+    } catch (err) {
+      setAuthMessage(friendlyError(err), true);
+    } finally {
+      button.disabled = false; button.innerHTML = 'Save new password <span>→</span>';
+    }
   });
 
   $("logout-button").addEventListener("click", async () => {
@@ -101,7 +138,7 @@
   });
 
   async function loadApp() {
-    if (!supabase) return;
+    if (!supabase || recoveryMode) return;
     const {data: {session}} = await supabase.auth.getSession();
     if (!session) { currentUser = null; dashboardView.classList.add("hidden"); authView.classList.remove("hidden"); return; }
     currentUser = session.user;
@@ -179,7 +216,7 @@
   }
   async function refreshDriverRides() {
     const host = $("driver-rides"); host.textContent = "Loading…";
-    const {data,error} = await supabase.from("rides").select("id,passenger_id,driver_id,pickup_text,destination_text,ride_type,status,created_at,agreed_fare").in("status",["requested","accepted","driver_on_the_way","arrived","started"]).order("created_at",{ascending:true}).limit(30);
+    const {data,error} = await supabase.from("rides").select("id,passenger_id,pickup_text,destination_text,ride_type,status,created_at,agreed_fare").in("status",["requested","accepted","driver_on_the_way","arrived","started"]).order("created_at",{ascending:true}).limit(30);
     if(error) {host.textContent = friendlyError(error);return;}
     const relevant = (data||[]).filter(r => r.status==="requested" || r.driver_id===currentUser.id);
     if(!relevant.length) {host.innerHTML='<div class="empty-state">No ride requests right now. Stay online to be available.</div>';return;}
@@ -269,10 +306,25 @@
 
   if(supabase) {
     supabase.auth.onAuthStateChange((event,session)=>{
-      if(event==="SIGNED_OUT"){currentUser=null;currentProfile=null;dashboardView.classList.add("hidden");authView.classList.remove("hidden");}
-      if(event==="SIGNED_IN" && session && !currentUser) { currentUser=session.user; setTimeout(()=>loadApp().catch(err=>toast(friendlyError(err),true)),0); }
+      if(event === "PASSWORD_RECOVERY") {
+        recoveryMode = true;
+        setTimeout(() => showPasswordReset("Recovery link verified. Choose a new password below."), 0);
+        return;
+      }
+      if(event === "SIGNED_OUT"){
+        currentUser=null;currentProfile=null;dashboardView.classList.add("hidden");authView.classList.remove("hidden");
+      }
+      if(event === "SIGNED_IN" && session && !currentUser && !recoveryMode) {
+        currentUser=session.user;
+        setTimeout(()=>loadApp().catch(err=>toast(friendlyError(err),true)),0);
+      }
     });
     supabase.auth.getSession().then(({data})=>{
+      if (recoveryMode) {
+        if (data.session) showPasswordReset("Recovery link opened. Choose and confirm your new password below.");
+        else setAuthMessage("This password-reset link may be expired or invalid. Request a new link after your email limit clears.", true);
+        return;
+      }
       if(data.session) loadApp().catch(err=>{console.error(err);toast("Signed in, but dashboard setup failed: "+friendlyError(err),true);});
     }).catch(err=>console.error(err));
   }
