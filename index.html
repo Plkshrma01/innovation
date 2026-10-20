@@ -33,6 +33,14 @@
           <button class="btn primary full" type="submit">Log in <span>→</span></button>
           <button class="text-button" id="forgot-password" type="button">Forgot password?</button>
         </form>
+        <form id="reset-password-form" class="auth-form hidden">
+          <h2>Choose a new password</h2>
+          <p class="muted">Set a new password for your AutoSetu account.</p>
+          <label>New password<input id="reset-password" type="password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters"></label>
+          <label>Confirm new password<input id="reset-password-confirm" type="password" autocomplete="new-password" required minlength="8" placeholder="Enter it again"></label>
+          <button class="btn primary full" type="submit">Save new password <span>→</span></button>
+          <button class="text-button" id="cancel-password-reset" type="button">Back to log in</button>
+        </form>
         <form id="signup-form" class="auth-form hidden">
           <h2>Create your account</h2><p class="muted">First, tell us how you’ll use AutoSetu.</p>
           <label>Full name<input id="signup-name" type="text" autocomplete="name" required minlength="2" placeholder="Your full name"></label>
